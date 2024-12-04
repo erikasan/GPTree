@@ -293,7 +293,6 @@ class GPTree:
         """
 
         if recursive_search: # Recursive search
-            print("show_progress is", show_progress)
             mean_DLGP, std_DLGP = self.recursive_predict(X_test, show_progress)
         
         else:   # Loop over all leaf nodes, even those with zero weights. 
