@@ -1,5 +1,7 @@
 # GPTree
-Python module for Gaussian Process regression with Dividing Local Gaussian Processes
+Python package for Gaussian Process regression with Dividing Local Gaussian Processes
+
+Install with `python setup.py install`
 
 https://arxiv.org/abs/2006.09446
 
