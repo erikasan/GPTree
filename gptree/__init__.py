@@ -256,7 +256,7 @@ class GPTree:
                 
     
     
-    def predict(self, X_test: np.ndarray, show_progress: Optional[bool]=False):
+    def predict(self, X_test: np.ndarray, recursive_search: Optional[bool]=True, show_progress: Optional[bool]=False):
         """ 
         Predict the target function at selected points in feature space. 
         
@@ -266,6 +266,14 @@ class GPTree:
         X_test: np.ndarray
             The points in feature space where we'd like to predict the target function. Has shape=(N_test, n_features).
 
+        recursive_search: Optional[bool]=True
+            Prediction with recursive search of leafs with nonzero marginal probabilities.
+            The method recursive_predict() is called instead.
+
+            If false the predictions of leafs with zero marginal probabilities are also computed. 
+
+            recursive_search should be set to True when N >> Nbar. Otherwise, this approach is actually slower. 
+
         show_progress: Optional[bool]=False
             Display a progress bar in the terminal using tqdm.
 
@@ -278,32 +286,36 @@ class GPTree:
         std_DLGP: np.ndarray
             The posterior standard deviation used to quantify the uncertainty in the prediction. Has shape=(N_test, 1).
         """
-        mean_DLGP = np.zeros((X_test.shape[0], 1))
-        var_DLGP = np.zeros((X_test.shape[0], 1))
 
-        for leaf in tqdm(self.root.leaves, disable=not show_progress, desc="Predicting"):
-            
-            #leaf.compute_my_GPR()
-            mu_leaf, sigma_leaf = leaf.my_GPR.predict(X_test, return_std=True)
-            mu_leaf = mu_leaf.reshape(mean_DLGP.shape)
-            sigma_leaf = sigma_leaf.reshape(mean_DLGP.shape)
-
-            ptilde = leaf.marg_prob(X_test)
-            ptilde = ptilde.reshape(mean_DLGP.shape)
-
-            mean_DLGP += ptilde*mu_leaf
-
-            var_DLGP += ptilde*(sigma_leaf*sigma_leaf + mu_leaf*mu_leaf)
+        if recursive_search: # Recursive search
+            mean_DLGP, std_DLGP = self.recursive_predict(X_test, show_progress)
         
-        var_DLGP += -mean_DLGP*mean_DLGP
+        else:   # Loop over all leaf nodes, even those with zero weights. 
+            mean_DLGP = np.zeros((X_test.shape[0], 1))
+            var_DLGP = np.zeros((X_test.shape[0], 1))
 
-        return mean_DLGP, np.sqrt(var_DLGP)
+            for leaf in tqdm(self.root.leaves, disable=not show_progress, desc="Predicting"):
+                
+                mu_leaf, sigma_leaf = leaf.my_GPR.predict(X_test, return_std=True)
+                mu_leaf = mu_leaf.reshape(mean_DLGP.shape)
+                sigma_leaf = sigma_leaf.reshape(mean_DLGP.shape)
+
+                ptilde = leaf.marg_prob(X_test)
+                ptilde = ptilde.reshape(mean_DLGP.shape)
+
+                mean_DLGP += ptilde*mu_leaf
+
+                var_DLGP += ptilde*(sigma_leaf*sigma_leaf + mu_leaf*mu_leaf)
+            
+            var_DLGP += -mean_DLGP*mean_DLGP
+            std_DLGP = np.sqrt(var_DLGP)
+
+        return mean_DLGP, std_DLGP
     
 
-    def _predict(self, X_test: np.ndarray, show_progress: Optional[bool]=False):
+    def recursive_predict(self, X_test: np.ndarray, show_progress: Optional[bool]=False):
         """ 
-        Second predict function using recursive function to collect contributing leaves.  
-        Will ̶m̶a̶y̶b̶e̶  likely replace the other one when N_train >> Nbar. 
+        Second predict function with recursive search of leaves with nonzero marginal probabilities.  
         
         Arguments
         ---------
@@ -323,16 +335,22 @@ class GPTree:
         std_DLGP: np.ndarray
             The posterior standard deviation used to quantify the uncertainty in the prediction. Has shape=(N_test, 1).
         """
-        
-        global sum_probs, collection_done
+
+        print('Recursive search.....')        
+
+        # Unneccesary to keep track of whether the marginal probabilities of the currently collected leaf nodes add up to one.
+        #global sum_probs, collection_done
 
         
         def collect_leaves(x: np.ndarray, current_node: GPNode, current_prob: float):
             """ Recursive function to collect contributing leaves for prediction at a test point x.  """
 
-            global sum_probs, collection_done
+            #global sum_probs, collection_done
 
-            if collection_done or current_prob <= 0:
+            """ if collection_done or current_prob <= 0:
+                return """
+            
+            if current_prob <= 0:
                 return
             
             # Return if we have reached a leaf node
@@ -340,9 +358,9 @@ class GPTree:
                 leaves.append(current_node)
                 pred_leaf_probs.append(current_prob)
 
-                sum_probs += current_prob
+                """ sum_probs += current_prob
                 if sum_probs >= 1:
-                    collection_done = True                
+                    collection_done = True   """             
                 return
 
             # Ok, not a leaf node. Now, for both child nodes:
@@ -367,8 +385,8 @@ class GPTree:
         for i, x in tqdm(enumerate(X_test), total=X_test.shape[0], disable=not show_progress, desc="Predicting"):
             x = x.reshape((1, x.shape[0]))
 
-            sum_probs = 0
-            collection_done = False
+            """ sum_probs = 0
+            collection_done = False """
 
             leaves = []
             pred_leaf_probs = []
