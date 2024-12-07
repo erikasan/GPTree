@@ -313,36 +313,10 @@ class GPTree:
         return mean_DLGP, std_DLGP
     
 
-    def recursive_predict(self, X_test: np.ndarray, show_progress: Optional[bool]=False):
-        """ 
-        Second predict function with recursive search of leaves with nonzero marginal probabilities.  
-        
-        Arguments
-        ---------
+    def collect_leaves(self, x: np.ndarray):
+        """ Collect the leaves that are active at x. """
 
-        X_test: np.ndarray
-            The points in feature space where we'd like to predict the target function. Has shape=(N_test, n_features).
-
-        show_progress: Optional[bool]=False
-            Display a progress bar in the terminal using tqdm.
-
-        Returns
-        -------
-
-        mean_DLGP: np.ndarray
-            The posterior mean used to predict the target function. Has shape=(N_test, 1).
-        
-        std_DLGP: np.ndarray
-            The posterior standard deviation used to quantify the uncertainty in the prediction. Has shape=(N_test, 1).
-        """
-
-        print('Recursive search.....')        
-
-        # Unneccesary to keep track of whether the marginal probabilities of the currently collected leaf nodes add up to one.
-        #global sum_probs, collection_done
-
-        
-        def collect_leaves(x: np.ndarray, current_node: GPNode, current_prob: float):
+        def _collect_leaves(x: np.ndarray, current_node: GPNode, current_prob: float):
             """ Recursive function to collect contributing leaves for prediction at a test point x.  """
 
             #global sum_probs, collection_done
@@ -371,27 +345,52 @@ class GPTree:
 
             p0 = current_prob*(1 - new_p)
             if p0 > 0:
-                collect_leaves(x, current_node.left, p0)
+                _collect_leaves(x, current_node.left, p0)
 
             p1 = current_prob*new_p
             if p1 > 0:
-                collect_leaves(x, current_node.right, p1)
+                _collect_leaves(x, current_node.right, p1)
 
             # Done
             return
+        
+        leaves = []
+        pred_leaf_probs = []
+
+        _collect_leaves(x, self.root, 1)
+
+        return leaves, pred_leaf_probs
+
+
+    def recursive_predict(self, X_test: np.ndarray, show_progress: Optional[bool]=False):
+        """ 
+        Second predict function with recursive search of leaves with nonzero marginal probabilities.  
+        
+        Arguments
+        ---------
+
+        X_test: np.ndarray
+            The points in feature space where we'd like to predict the target function. Has shape=(N_test, n_features).
+
+        show_progress: Optional[bool]=False
+            Display a progress bar in the terminal using tqdm.
+
+        Returns
+        -------
+
+        mean_DLGP: np.ndarray
+            The posterior mean used to predict the target function. Has shape=(N_test, 1).
+        
+        std_DLGP: np.ndarray
+            The posterior standard deviation used to quantify the uncertainty in the prediction. Has shape=(N_test, 1).
+        """        
         
         mean_DLGP = np.zeros((X_test.shape[0], 1))
         var_DLGP = np.zeros((X_test.shape[0], 1))
         for i, x in tqdm(enumerate(X_test), total=X_test.shape[0], disable=not show_progress, desc="Predicting"):
             x = x.reshape((1, x.shape[0]))
 
-            """ sum_probs = 0
-            collection_done = False """
-
-            leaves = []
-            pred_leaf_probs = []
-
-            collect_leaves(x, self.root, 1)
+            leaves, pred_leaf_probs = self.collect_leaves(x)
         
             for leaf, ptilde in zip(leaves, pred_leaf_probs):
                 
@@ -404,6 +403,52 @@ class GPTree:
             var_DLGP[i] += -mean_DLGP[i]*mean_DLGP[i]
         
         return mean_DLGP, np.sqrt(var_DLGP)
+    
+
+    def sample_predict(self, X_test: np.ndarray, num_samples: Optional[int]=100, show_progress: Optional[bool]=False):
+
+        """ If X_test has shape (num_test_points, num_features),
+            
+            Returns an array "sample_array" with shape (num_test_points, num_samples)
+
+            The samples are drawn from the predictive distribution at each test point.
+        """
+
+        num_test_points = X_test.shape[0]
+
+        sample_array = np.zeros((num_test_points, num_samples))
+
+        for i, x in tqdm(enumerate(X_test), total=X_test.shape[0], disable=not show_progress, desc="Predicting"):
+            x = x.reshape((1, x.shape[0]))
+
+            # Lists with the predictive mean and standard deviation of each expert at the point x
+            means = [] 
+            stds = []
+
+            leaves, pred_leaf_probs = self.collect_leaves(x)
+
+            leaf_indices = [j for j in range(len(leaves))]
+
+            # Because of mistakes I made when I was young and stupid
+            pred_leaf_probs = [pred_leaf_probs[p][0][0] for p in range(len(pred_leaf_probs))]
+
+            for leaf in leaves:
+                mu_leaf, sigma_leaf = leaf.my_GPR.predict(x, return_std=True)
+                
+                means.append(mu_leaf)
+                stds.append(sigma_leaf)
+
+            for k in range(num_samples):
+
+                # Pick a leaf
+                leaf_index = np.random.choice(leaf_indices, size=1, p=pred_leaf_probs)
+                leaf_index = leaf_index[0]
+
+                sample = np.random.normal(loc=means[leaf_index], scale=stds[leaf_index])
+
+                sample_array[i, k] = sample
+
+        return sample_array
 
     def predict_piecewise(self, x_test):
         """ Get the prediction of each leaf node respectively.  """
