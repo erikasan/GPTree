@@ -227,6 +227,7 @@ class GPTree:
         shuffle: Optional[bool]=True
             Shuffle the training set to avoid an unbalanced tree.
         """
+
         self.n_features = X_train.shape[1]
         N = X_train.shape[0]
         self.root.init_training_set(self.n_features)
@@ -286,7 +287,6 @@ class GPTree:
         std_DLGP: np.ndarray
             The posterior standard deviation used to quantify the uncertainty in the prediction. Has shape=(N_test, 1).
         """
-
         if recursive_search: # Recursive search
             mean_DLGP, std_DLGP = self.recursive_predict(X_test, show_progress)
         
@@ -411,7 +411,7 @@ class GPTree:
             
             Returns an array "sample_array" with shape (num_test_points, num_samples)
 
-            The samples are drawn from the predictive distribution at each test point.
+            The samples are drawn from the mixture of experts predictive distribution at each test point.
         """
 
         num_test_points = X_test.shape[0]
