@@ -3,6 +3,7 @@ from binarytree import Node
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 from sklearn.utils import resample
+from sklearn.base import clone
 
 from numpy.random import binomial
 
@@ -14,7 +15,8 @@ from tqdm import tqdm
 
 import joblib
 
-from scipy.optimize import differential_evolution
+from scipy.optimize import differential_evolution, minimize
+from scipy.linalg import cho_solve, cholesky
 
 def _differential_evolution(obj_func: Callable, initial_theta: np.ndarray, bounds: tuple):
     pass
@@ -209,7 +211,9 @@ class GPTree:
         node.add_training_data(x, y)
         #node.compute_my_GPR()
         
-    def fit(self, X_train: np.ndarray, y_train: np.ndarray, show_progress: Optional[bool]=False, shuffle: Optional[bool]=True, inherit_GPR=False):
+    def fit(self, X_train: np.ndarray, y_train: np.ndarray, 
+            show_progress: Optional[bool]=False, shuffle: Optional[bool]=True, inherit_GPR=False,
+            share_hyperparams: Optional[bool]=False):
         """
         Build the binary tree by assigning training samples to nodes and train the GP of the leaf nodes.
 
@@ -240,11 +244,16 @@ class GPTree:
             y = y.reshape((1, 1))
             self.updateTree(x, y)
         
-        for i, leaf in tqdm(enumerate(self.root.leaves), total=len(self.root.leaves), disable=not show_progress, desc="Training"):
-            leaf.is_leaf = True
-            leaf.compute_my_GPR()
-            if inherit_GPR and i != len(self.root.leaves) - 1:
-                self.root.leaves[i+1].my_GPR = deepcopy(leaf.my_GPR)
+
+        if share_hyperparams: # Training with shared hyperparameters
+            self.fit_shared_hyperparams()
+        
+        else: # Train each leaf node independently on their local training set.
+            for i, leaf in tqdm(enumerate(self.root.leaves), total=len(self.root.leaves), disable=not show_progress, desc="Training"):
+                leaf.is_leaf = True
+                leaf.compute_my_GPR()
+                if inherit_GPR and i != len(self.root.leaves) - 1:
+                    self.root.leaves[i+1].my_GPR = deepcopy(leaf.my_GPR)
 
             
             """ kernel = leaf.my_GPR.kernel_
@@ -253,8 +262,7 @@ class GPTree:
                 infile.write("##############")
                 for hyperparameter, hyperparameter_value in zip(kernel.hyperparameters, kernel.theta):
                     infile.write(f"{hyperparameter} {np.exp(hyperparameter_value)} \n") """
-                
-                
+                  
     
     
     def predict(self, X_test: np.ndarray, recursive_search: Optional[bool]=True, show_progress: Optional[bool]=False):
@@ -460,3 +468,106 @@ class GPTree:
     
     def save(self, path: str):
         joblib.dump(self, path)
+
+    
+
+    def sum_negative_log_marginal_likelihoods(self, hyperparams, eval_gradient=False):
+        """ Return the sum of the negative log marginal likelihoods of the leaf nodes 
+            each evaluated with the same hyperparameters.
+
+            If eval_gradient is True it also returns the gradient with respect to 
+            the natural logs of the hyperparameters.
+
+            NOTE: Only works with scikit-learn's GaussianProcessRegressor.    
+         """
+
+        if eval_gradient:
+            sum_log_marginal_likelihoods = 0
+            sum_log_marginal_likelihoods_gradient = 0
+            for leaf in self.root.leaves:
+                lml, lml_gradient = leaf.my_GPR.log_marginal_likelihood(theta=hyperparams, eval_gradient=True)
+                sum_log_marginal_likelihoods += lml
+                sum_log_marginal_likelihoods_gradient += lml_gradient
+            
+            return -sum_log_marginal_likelihoods, -sum_log_marginal_likelihoods_gradient
+        
+        else:
+            sum_log_marginal_likelihoods = 0
+            for leaf in self.root.leaves:
+                lml = leaf.my_GPR.log_marginal_likelihood(theta=hyperparams, eval_gradient=False)
+                sum_log_marginal_likelihoods += lml
+
+            return -sum_log_marginal_likelihoods
+    
+
+    def _obj_func(self, hyperparams, eval_gradient=False):
+        """ The objective function to be minimized. Sets the (log transformed) hyperparameters of the leaf nodes
+            to hyperparams at each call.
+
+            Returns the sum negative log marginal likelihood.
+        """
+
+        for leaf in self.root.leaves:
+            #leaf.my_GPR.kernel_.theta = np.log(hyperparams)
+            leaf.my_GPR.kernel_.theta = hyperparams
+
+        return self.sum_negative_log_marginal_likelihoods(hyperparams=hyperparams, eval_gradient=eval_gradient)
+    
+
+    def fit_shared_hyperparams(self):
+        """ Train the leaf nodes with shared hyperparmeters using L-BFGS.
+        """
+
+        # Initialize kernel_, X_train_, y_train_ attributes, which otherwise doesn't exist unless gp.fit() is called.
+        for leaf in self.root.leaves:
+            leaf.my_GPR.kernel_ = clone(leaf.my_GPR.kernel)
+            #leaf.my_GPR.kernel_ = leaf.my_GPR.kernel
+            leaf.my_GPR.X_train_ = leaf.my_X_data
+            leaf.my_GPR.y_train_ = leaf.my_y_data
+
+            shape_y_stats = (leaf.my_y_data.shape[1],) if leaf.my_y_data.ndim == 2 else 1
+            leaf.my_GPR._y_train_mean = np.zeros(shape=shape_y_stats)
+            leaf.my_GPR._y_train_std = np.ones(shape=shape_y_stats)
+
+        
+        initial_hyperparams = leaf.my_GPR.kernel.theta
+        bounds = leaf.my_GPR.kernel.bounds
+
+        result = minimize(
+            fun=lambda x: self._obj_func(x, eval_gradient=True),
+            x0=initial_hyperparams,
+            bounds=bounds,
+            method='L-BFGS-B',
+            jac=True,
+        )
+
+        if not result.success:
+            print("Warning: Optimization failed")
+
+        
+        # Precompute quantities required for predictions which are independent of actual query points
+        for leaf in self.root.leaves:
+            X_train_ = leaf.my_GPR.X_train_
+            K = leaf.my_GPR.kernel_(X_train_)
+            K[np.diag_indices_from(K)] += leaf.my_GPR.alpha
+
+            try:
+                leaf.my_GPR.L_ = cholesky(K, lower=True, check_finite=False)
+            except np.linalg.LinAlgError as exc:
+                exc.args = (
+                    (
+                        f"The kernel, {self.kernel_}, is not returning a positive "
+                        "definite matrix. Try gradually increasing the 'alpha' "
+                        "parameter of your GaussianProcessRegressor estimator."
+                    ),
+                ) + exc.args
+                raise
+
+            leaf.my_GPR.alpha_ = cho_solve(
+                (leaf.my_GPR.L_, True),
+                leaf.my_GPR.y_train_,
+                check_finite=False,
+                )
+
+
+        return result.x, self._obj_func(result.x, eval_gradient=False)
