@@ -71,13 +71,13 @@ class GPNode(Node):
     def num_training_points(self, value):
         self.value = value
 
-    def init_training_set(self, n_features: int):
+    def init_training_set(self, n_features: int, n_targets: int):
         """ Initialize the training set of the node. """
         self.my_X_data = np.array([]).reshape((0, n_features))
-        self.my_y_data = np.array([]).reshape((0, 1))
+        self.my_y_data = np.array([]).reshape((0, n_targets))
         self.n_features = n_features
 
-    def generate_children(self, GPR: Type[GaussianProcessRegressor], n_features: int):
+    def generate_children(self, GPR: Type[GaussianProcessRegressor], n_features: int, n_targets: int):
         """ Grow the GPtree by adding two GPNodes as children of the current GPNode. """
         self.left = GPNode(0, my_GPR=deepcopy(GPR))
         self.right = GPNode(0, my_GPR=deepcopy(GPR))
@@ -88,7 +88,7 @@ class GPNode(Node):
 
         for child in self.children:
             child.parent = self
-            child.init_training_set(n_features)
+            child.init_training_set(n_features, n_targets)
 
 
 
@@ -104,7 +104,7 @@ class GPNode(Node):
         """ Assign the training samples of a node to its child nodes. """
         for x, y in zip(self.my_X_data, self.my_y_data):
             x = x.reshape((1, x.shape[0]))
-            y = y.reshape((1, 1))
+            y = y.reshape(1, -1)
             child = self.children[int(binomial(1, self.prob_func(x)))]
             child.add_training_data(x, y)
         
@@ -159,7 +159,7 @@ class GPNode(Node):
         
 
 class GPTree:
-    """ Class for GPTree regression (only scalar target functions implemented).
+    """ Class for regression with Dividing Local Gaussian Processes.
     
         Attributes
         ----------
@@ -184,6 +184,7 @@ class GPTree:
         self.theta = theta
 
         self.n_features = 0
+        self.n_targets = 0
 
 
     def updateTree(self, x: np.ndarray, y: float):
@@ -194,7 +195,7 @@ class GPTree:
         
 
         if node.num_training_points == self.Nbar:   # If the node is full
-            node.generate_children(self.GPR, self.n_features) # generate child nodes
+            node.generate_children(self.GPR, self.n_features, self.n_targets) # generate child nodes
             
             
             node.compute_s_and_o(self.theta)        # Calculate parameters in probability function
@@ -223,7 +224,7 @@ class GPTree:
             The training data in feature space. Has shape=(N_train, n_features).
 
         y_train: np.ndarray
-            The training data in target space. Has shape=(N_train, 1) (only scalar targets implemented).
+            The training data in target space. Has shape=(N_train, n_targets).
 
         show_progress: Optional[bool]=False
             Display a progress bar in the terminal using tqdm.
@@ -233,24 +234,26 @@ class GPTree:
         """
 
         self.n_features = X_train.shape[1]
+        self.n_targets = y_train.shape[1]
         N = X_train.shape[0]
-        self.root.init_training_set(self.n_features)
+        self.root.init_training_set(self.n_features, self.n_targets)
 
         if shuffle:
             X_train, y_train = resample(X_train, y_train, replace=False)
 
         for x, y in tqdm(zip(X_train, y_train), total=N, disable=not show_progress, desc="Building binary tree"):
             x = x.reshape((1, x.shape[0]))
-            y = y.reshape((1, 1))
+            y = y.reshape((1, self.n_targets))
             self.updateTree(x, y)
-        
+
+        for leaf in self.root.leaves:
+            leaf.is_leaf = True        
 
         if share_hyperparams: # Training with shared hyperparameters
             self.fit_shared_hyperparams()
         
         else: # Train each leaf node independently on their local training set.
             for i, leaf in tqdm(enumerate(self.root.leaves), total=len(self.root.leaves), disable=not show_progress, desc="Training"):
-                leaf.is_leaf = True
                 leaf.compute_my_GPR()
                 if inherit_GPR and i != len(self.root.leaves) - 1:
                     self.root.leaves[i+1].my_GPR = deepcopy(leaf.my_GPR)
@@ -299,8 +302,8 @@ class GPTree:
             mean_DLGP, std_DLGP = self.recursive_predict(X_test, show_progress)
         
         else:   # Loop over all leaf nodes, even those with zero weights. 
-            mean_DLGP = np.zeros((X_test.shape[0], 1))
-            var_DLGP = np.zeros((X_test.shape[0], 1))
+            mean_DLGP = np.zeros((X_test.shape[0], self.n_targets))
+            var_DLGP = np.zeros((X_test.shape[0], self.n_targets))
 
             for leaf in tqdm(self.root.leaves, disable=not show_progress, desc="Predicting"):
                 
@@ -309,7 +312,8 @@ class GPTree:
                 sigma_leaf = sigma_leaf.reshape(mean_DLGP.shape)
 
                 ptilde = leaf.marg_prob(X_test)
-                ptilde = ptilde.reshape(mean_DLGP.shape)
+                #ptilde = ptilde.reshape(mean_DLGP.shape)
+                ptilde = ptilde.reshape(X_test.shape[0], 1)
 
                 mean_DLGP += ptilde*mu_leaf
 
@@ -393,8 +397,8 @@ class GPTree:
             The posterior standard deviation used to quantify the uncertainty in the prediction. Has shape=(N_test, 1).
         """        
         
-        mean_DLGP = np.zeros((X_test.shape[0], 1))
-        var_DLGP = np.zeros((X_test.shape[0], 1))
+        mean_DLGP = np.zeros((X_test.shape[0], self.n_targets))
+        var_DLGP = np.zeros((X_test.shape[0], self.n_targets))
         for i, x in tqdm(enumerate(X_test), total=X_test.shape[0], disable=not show_progress, desc="Predicting"):
             x = x.reshape((1, x.shape[0]))
 
