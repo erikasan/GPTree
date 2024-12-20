@@ -211,7 +211,31 @@ class GPTree:
         
         node.add_training_data(x, y)
         #node.compute_my_GPR()
+
+    def build_binary_tree(self, X_train: np.ndarray, y_train: np.ndarray, 
+            show_progress: Optional[bool]=False, shuffle: Optional[bool]=True):
         
+        self.n_features = X_train.shape[1]
+        self.n_targets = y_train.shape[1]
+        N = X_train.shape[0]
+        self.root.init_training_set(self.n_features, self.n_targets)
+
+        if shuffle:
+            X_train, y_train = resample(X_train, y_train, replace=False)
+
+        for x, y in tqdm(zip(X_train, y_train), total=N, disable=not show_progress, desc="Building binary tree"):
+            x = x.reshape((1, x.shape[0]))
+            y = y.reshape((1, self.n_targets))
+            self.updateTree(x, y)
+
+        for leaf in self.root.leaves:
+            leaf.is_leaf = True
+            leaf.my_GPR.kernel_ = clone(leaf.my_GPR.kernel)
+            leaf.my_GPR.X_train_ = leaf.my_X_data
+            leaf.my_GPR.y_train_ = leaf.my_y_data
+
+        return
+
     def fit(self, X_train: np.ndarray, y_train: np.ndarray, 
             show_progress: Optional[bool]=False, shuffle: Optional[bool]=True, inherit_GPR=False,
             share_hyperparams: Optional[bool]=False):
@@ -233,21 +257,7 @@ class GPTree:
             Shuffle the training set to avoid an unbalanced tree.
         """
 
-        self.n_features = X_train.shape[1]
-        self.n_targets = y_train.shape[1]
-        N = X_train.shape[0]
-        self.root.init_training_set(self.n_features, self.n_targets)
-
-        if shuffle:
-            X_train, y_train = resample(X_train, y_train, replace=False)
-
-        for x, y in tqdm(zip(X_train, y_train), total=N, disable=not show_progress, desc="Building binary tree"):
-            x = x.reshape((1, x.shape[0]))
-            y = y.reshape((1, self.n_targets))
-            self.updateTree(x, y)
-
-        for leaf in self.root.leaves:
-            leaf.is_leaf = True        
+        self.build_binary_tree(X_train=X_train, y_train=y_train, show_progress=show_progress, shuffle=shuffle)      
 
         if share_hyperparams: # Training with shared hyperparameters
             self.fit_shared_hyperparams()
@@ -265,7 +275,7 @@ class GPTree:
                 infile.write("##############")
                 for hyperparameter, hyperparameter_value in zip(kernel.hyperparameters, kernel.theta):
                     infile.write(f"{hyperparameter} {np.exp(hyperparameter_value)} \n") """
-                  
+        return  
     
     
     def predict(self, X_test: np.ndarray, recursive_search: Optional[bool]=True, show_progress: Optional[bool]=False):
