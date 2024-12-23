@@ -183,6 +183,7 @@ class GPTree:
         self.Nbar = Nbar
         self.theta = theta
 
+        self.n_training_points = 0
         self.n_features = 0
         self.n_targets = 0
 
@@ -217,13 +218,13 @@ class GPTree:
         
         self.n_features = X_train.shape[1]
         self.n_targets = y_train.shape[1]
-        N = X_train.shape[0]
+        self.n_training_points = X_train.shape[0]
         self.root.init_training_set(self.n_features, self.n_targets)
 
         if shuffle:
             X_train, y_train = resample(X_train, y_train, replace=False)
 
-        for x, y in tqdm(zip(X_train, y_train), total=N, disable=not show_progress, desc="Building binary tree"):
+        for x, y in tqdm(zip(X_train, y_train), total=self.n_training_points, disable=not show_progress, desc="Building binary tree"):
             x = x.reshape((1, x.shape[0]))
             y = y.reshape((1, self.n_targets))
             self.updateTree(x, y)
