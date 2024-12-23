@@ -318,6 +318,7 @@ class GPTree:
             for leaf in tqdm(self.root.leaves, disable=not show_progress, desc="Predicting"):
                 
                 mu_leaf, sigma_leaf = leaf.my_GPR.predict(X_test, return_std=True)
+
                 mu_leaf = mu_leaf.reshape(mean_DLGP.shape)
                 sigma_leaf = sigma_leaf.reshape(mean_DLGP.shape)
 
@@ -431,14 +432,14 @@ class GPTree:
 
         """ If X_test has shape (num_test_points, num_features),
             
-            Returns an array "sample_array" with shape (num_test_points, num_samples)
+            Returns an array "sample_array" with shape (num_test_points, num_targets, num_samples)
 
             The samples are drawn from the mixture of experts predictive distribution at each test point.
         """
 
         num_test_points = X_test.shape[0]
 
-        sample_array = np.zeros((num_test_points, num_samples))
+        sample_array = np.zeros((num_test_points, self.n_targets, num_samples))
 
         for i, x in tqdm(enumerate(X_test), total=X_test.shape[0], disable=not show_progress, desc="Predicting"):
             x = x.reshape((1, x.shape[0]))
@@ -456,19 +457,36 @@ class GPTree:
 
             for leaf in leaves:
                 mu_leaf, sigma_leaf = leaf.my_GPR.predict(x, return_std=True)
+
+                if self.n_targets == 1:
+                    mu_leaf = mu_leaf.reshape(-1, 1)
+                    sigma_leaf = sigma_leaf.reshape(-1, 1)
                 
                 means.append(mu_leaf)
                 stds.append(sigma_leaf)
 
-            for k in range(num_samples):
+            """ for target_index in range(self.n_targets):
+                for k in range(num_samples):
 
+                    # Pick a leaf
+                    leaf_index = np.random.choice(leaf_indices, size=1, p=pred_leaf_probs)
+                    leaf_index = leaf_index[0]
+
+                    sample = np.random.normal(loc=means[leaf_index][target_index], scale=stds[leaf_index][target_index])
+
+                    print("sample.shape=", sample.shape)
+                    print("sample=", sample)
+
+                    sample_array[i, target_index, k] = sample """
+            
+            for k in range(num_samples):
                 # Pick a leaf
                 leaf_index = np.random.choice(leaf_indices, size=1, p=pred_leaf_probs)
                 leaf_index = leaf_index[0]
 
-                sample = np.random.normal(loc=means[leaf_index], scale=stds[leaf_index])
+                sample = np.random.normal(loc=means[leaf_index], scale=stds[leaf_index], size=(1, self.n_targets))
 
-                sample_array[i, k] = sample
+                sample_array[i, :, k] = sample
 
         return sample_array
 
