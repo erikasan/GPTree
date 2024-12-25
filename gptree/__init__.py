@@ -15,6 +15,9 @@ from tqdm import tqdm
 
 import joblib
 
+import sys
+import time
+
 from scipy.optimize import differential_evolution, minimize
 from scipy.linalg import cho_solve, cholesky
 
@@ -565,6 +568,8 @@ class GPTree:
         
         initial_hyperparams = leaf.my_GPR.kernel.theta
         bounds = leaf.my_GPR.kernel.bounds
+
+        print("Training leaf nodes with shared hyperparameters...")
 
         result = minimize(
             fun=lambda x: self._obj_func(x, eval_gradient=True),
