@@ -569,6 +569,7 @@ class GPTree:
         initial_hyperparams = leaf.my_GPR.kernel.theta
         bounds = leaf.my_GPR.kernel.bounds
 
+        # Would be cool to have an animation in the future
         print("Training leaf nodes with shared hyperparameters...")
 
         result = minimize(
